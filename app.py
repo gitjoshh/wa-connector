@@ -2,12 +2,15 @@ from flask import Flask, request, jsonify
 import os
 import requests
 import json
+import hmac
 from datetime import datetime
 
 app = Flask(__name__)
 
 VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN', 'my_verify_token')
 WHATSAPP_TOKEN = os.environ.get('WHATSAPP_TOKEN', '')
+PHONE_NUMBER_ID = os.environ.get('PHONE_NUMBER_ID', '')
+WHATSAPP_API_TOKEN = os.environ.get('WHATSAPP_API_TOKEN', '')
 
 
 @app.route('/webhook', methods=['GET'])
@@ -95,6 +98,91 @@ def download_media(media_id, from_number, timestamp):
         print(f"Voice note saved: {filename}")
     else:
         print(f"Failed to download audio: {audio_response.text}")
+
+
+def check_caller_auth():
+    """Validates the caller's Authorization header against WHATSAPP_API_TOKEN."""
+    auth_header = request.headers.get('Authorization', '')
+    prefix = 'Bearer '
+    token = auth_header[len(prefix):] if auth_header.startswith(prefix) else ''
+    if not token or not hmac.compare_digest(token, WHATSAPP_API_TOKEN):
+        return False
+    return True
+
+
+def send_to_meta(payload):
+    """POSTs a message payload to the Meta Graph API and returns (status, body)."""
+    headers = {
+        'Authorization': f'Bearer {WHATSAPP_TOKEN}',
+        'Content-Type': 'application/json'
+    }
+    meta_response = requests.post(
+        f'https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages',
+        headers=headers,
+        json=payload
+    )
+    return meta_response
+
+
+@app.route('/send', methods=['POST'])
+def send_message():
+    if not check_caller_auth():
+        return jsonify({'status': 'error', 'detail': 'Unauthorized'}), 401
+
+    data = request.json or {}
+    to = data.get('to')
+    message = data.get('message')
+    if not to or not message:
+        return jsonify({'status': 'error', 'detail': 'Missing required fields: to, message'}), 400
+
+    payload = {
+        'messaging_product': 'whatsapp',
+        'to': to,
+        'type': 'text',
+        'text': {'body': message}
+    }
+
+    meta_response = send_to_meta(payload)
+    if meta_response.status_code == 200:
+        return jsonify({'status': 'sent', 'response': meta_response.json()}), 200
+    else:
+        return jsonify({'status': 'error', 'detail': meta_response.text}), meta_response.status_code
+
+
+@app.route('/send-template', methods=['POST'])
+def send_template_message():
+    if not check_caller_auth():
+        return jsonify({'status': 'error', 'detail': 'Unauthorized'}), 401
+
+    data = request.json or {}
+    to = data.get('to')
+    template_name = data.get('template_name')
+    language = data.get('language', 'en_US')
+    params = data.get('params', [])
+    if not to or not template_name or not params:
+        return jsonify({'status': 'error', 'detail': 'Missing required fields: to, template_name, params'}), 400
+
+    payload = {
+        'messaging_product': 'whatsapp',
+        'to': to,
+        'type': 'template',
+        'template': {
+            'name': template_name,
+            'language': {'code': language},
+            'components': [
+                {
+                    'type': 'body',
+                    'parameters': [{'type': 'text', 'text': params[0]}]
+                }
+            ]
+        }
+    }
+
+    meta_response = send_to_meta(payload)
+    if meta_response.status_code == 200:
+        return jsonify({'status': 'sent', 'response': meta_response.json()}), 200
+    else:
+        return jsonify({'status': 'error', 'detail': meta_response.text}), meta_response.status_code
 
 
 if __name__ == '__main__':
