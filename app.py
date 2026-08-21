@@ -4,6 +4,9 @@ import requests
 import json
 import hmac
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -11,6 +14,7 @@ VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN', 'my_verify_token')
 WHATSAPP_TOKEN = os.environ.get('WHATSAPP_TOKEN', '')
 PHONE_NUMBER_ID = os.environ.get('PHONE_NUMBER_ID', '')
 WHATSAPP_API_TOKEN = os.environ.get('WHATSAPP_API_TOKEN', '')
+TOUCH_CRM_URL = os.environ.get('TOUCH_CRM_URL', '')
 
 
 @app.route('/webhook', methods=['GET'])
@@ -47,6 +51,7 @@ def receive_message():
                     if msg_type == 'text':
                         text = message['text']['body']
                         log_message(from_number, 'text', text, timestamp)
+                        forward_to_touch_crm(from_number, text, timestamp)
 
                     elif msg_type == 'audio':
                         media_id = message['audio']['id']
@@ -69,6 +74,29 @@ def log_message(from_number, msg_type, content, timestamp):
     print(f"LOG: {json.dumps(log_entry)}")
     with open('messages.log', 'a') as f:
         f.write(json.dumps(log_entry) + '\n')
+
+
+def forward_to_touch_crm(from_number, text, timestamp):
+    """Fire-and-forget forward of an inbound text message to Touch CRM.
+
+    Never allowed to break the webhook response to Meta: skipped entirely if
+    TOUCH_CRM_URL isn't configured, and any failure (timeout, connection
+    error, non-2xx, whatever) is swallowed silently.
+    """
+    if not TOUCH_CRM_URL:
+        return
+    try:
+        requests.post(
+            f'{TOUCH_CRM_URL}/incoming-whatsapp',
+            json={
+                'from': from_number,
+                'message': text,
+                'timestamp': datetime.fromtimestamp(int(timestamp)).isoformat(),
+            },
+            timeout=5,
+        )
+    except Exception:
+        pass
 
 
 def download_media(media_id, from_number, timestamp):
