@@ -3,7 +3,7 @@ import os
 import requests
 import json
 import hmac
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -69,7 +69,7 @@ def log_message(from_number, msg_type, content, timestamp):
         'from': from_number,
         'type': msg_type,
         'content': content,
-        'timestamp': datetime.fromtimestamp(int(timestamp)).isoformat()
+        'timestamp': datetime.fromtimestamp(int(timestamp), tz=timezone.utc).isoformat()
     }
     print(f"LOG: {json.dumps(log_entry)}")
     with open('messages.log', 'a') as f:
@@ -91,7 +91,7 @@ def forward_to_touch_crm(from_number, text, timestamp):
             json={
                 'from': from_number,
                 'message': text,
-                'timestamp': datetime.fromtimestamp(int(timestamp)).isoformat(),
+                'timestamp': datetime.fromtimestamp(int(timestamp), tz=timezone.utc).isoformat(),
             },
             timeout=5,
         )
