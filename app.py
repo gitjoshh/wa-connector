@@ -15,6 +15,9 @@ WHATSAPP_TOKEN = os.environ.get('WHATSAPP_TOKEN', '')
 PHONE_NUMBER_ID = os.environ.get('PHONE_NUMBER_ID', '')
 WHATSAPP_API_TOKEN = os.environ.get('WHATSAPP_API_TOKEN', '')
 TOUCH_CRM_URL = os.environ.get('TOUCH_CRM_URL', '')
+HUBSPOT_WEBHOOK_SECRET = os.environ.get('HUBSPOT_WEBHOOK_SECRET', '')
+RELAY_PULL_SECRET = os.environ.get('RELAY_PULL_SECRET', '')
+HUBSPOT_QUEUE_FILE = 'hubspot_queue.jsonl'
 
 
 @app.route('/webhook', methods=['GET'])
@@ -130,12 +133,51 @@ def download_media(media_id, from_number, timestamp):
 
 def check_caller_auth():
     """Validates the caller's Authorization header against WHATSAPP_API_TOKEN."""
+    return _check_bearer_token(WHATSAPP_API_TOKEN)
+
+
+def _check_bearer_token(expected):
+    """Validates the caller's Authorization: Bearer <token> header against expected."""
     auth_header = request.headers.get('Authorization', '')
     prefix = 'Bearer '
     token = auth_header[len(prefix):] if auth_header.startswith(prefix) else ''
-    if not token or not hmac.compare_digest(token, WHATSAPP_API_TOKEN):
+    if not expected or not token or not hmac.compare_digest(token, expected):
         return False
     return True
+
+
+@app.route('/hubspot-webhook', methods=['POST'])
+def receive_hubspot_webhook():
+    """HubSpot's 'Send a webhook' workflow action posts here. Queued to a local
+    file rather than forwarded live -- Touch CRM (behind no public address)
+    drains the queue on its own schedule via GET /hubspot-webhook/pending."""
+    if not _check_bearer_token(HUBSPOT_WEBHOOK_SECRET):
+        return jsonify({'status': 'error', 'detail': 'Unauthorized'}), 401
+
+    payload = request.json or {}
+    entry = {'received_at': datetime.now(timezone.utc).isoformat(), 'payload': payload}
+    with open(HUBSPOT_QUEUE_FILE, 'a') as f:
+        f.write(json.dumps(entry) + '\n')
+
+    return jsonify({'status': 'queued'}), 200
+
+
+@app.route('/hubspot-webhook/pending', methods=['GET'])
+def pull_hubspot_webhook_queue():
+    """Returns all queued HubSpot payloads and clears the queue. Single
+    consumer (Touch CRM) is assumed -- no ack/retry semantics."""
+    if not _check_bearer_token(RELAY_PULL_SECRET):
+        return jsonify({'status': 'error', 'detail': 'Unauthorized'}), 401
+
+    if not os.path.exists(HUBSPOT_QUEUE_FILE):
+        return jsonify({'entries': []}), 200
+
+    with open(HUBSPOT_QUEUE_FILE, 'r') as f:
+        lines = [line for line in f.read().splitlines() if line.strip()]
+    open(HUBSPOT_QUEUE_FILE, 'w').close()
+
+    entries = [json.loads(line) for line in lines]
+    return jsonify({'entries': entries}), 200
 
 
 def send_to_meta(payload):
