@@ -164,8 +164,11 @@ def receive_hubspot_webhook():
 
 @app.route('/hubspot-webhook/pending', methods=['GET'])
 def pull_hubspot_webhook_queue():
-    """Returns all queued HubSpot payloads and clears the queue. Single
-    consumer (Touch CRM) is assumed -- no ack/retry semantics."""
+    """Returns all queued HubSpot payloads and clears the queue, unless
+    ?peek=1 is passed (inspect without consuming -- e.g. for manually
+    checking what's waiting without racing the next real poll). Single
+    consumer (Touch CRM) is assumed for the non-peek path -- no ack/retry
+    semantics."""
     if not _check_bearer_token(RELAY_PULL_SECRET):
         return jsonify({'status': 'error', 'detail': 'Unauthorized'}), 401
 
@@ -174,7 +177,9 @@ def pull_hubspot_webhook_queue():
 
     with open(HUBSPOT_QUEUE_FILE, 'r') as f:
         lines = [line for line in f.read().splitlines() if line.strip()]
-    open(HUBSPOT_QUEUE_FILE, 'w').close()
+
+    if request.args.get('peek') != '1':
+        open(HUBSPOT_QUEUE_FILE, 'w').close()
 
     entries = [json.loads(line) for line in lines]
     return jsonify({'entries': entries}), 200
